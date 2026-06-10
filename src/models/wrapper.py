@@ -3,81 +3,84 @@
 
 import json
 import torch
-import torch.nn as nn
+import numpy as np
+from typing import Optional, List
 from pathlib import Path
-from typing import List, Optional
 
 
 class ModelWrapper:
-    """模型封装器。
+    """模型加载与推理封装。
 
-    加载 JIT 模型或标准 PyTorch checkpoint，提供统一的推理接口。
+    加载 TorchScript 模型，提供统一的 predict() 接口。
     """
 
-    def __init__(
-        self,
-        model_path: str,
-        device: str = "cpu",
-        info_path: Optional[str] = None,
-    ):
+    def __init__(self, model_path: str, device: str = "cpu", info_path: Optional[str] = None):
         """
         Parameters
         ----------
         model_path : str
-            TorchScript (.jit) 或 .pt checkpoint 路径。
+            TorchScript .jit 模型文件路径。
         device : str
-            运行设备 ("cpu" / "cuda" / "mps")。
+            "cpu" / "cuda" / "mps"。
         info_path : str, optional
-            模型元信息 JSON 路径。
+            模型信息 JSON 文件路径。
         """
         self.device = torch.device(device)
-        self.model_path = Path(model_path)
-        self.info_path = Path(info_path) if info_path else None
-        self.model_info = self._load_info()
-        self.model = self._load_model()
+        self.model = torch.jit.load(model_path, map_location=self.device)
+        self.model.eval()
 
-    def _load_model(self) -> nn.Module:
-        suffix = self.model_path.suffix
-        if suffix in (".jit", ".pt"):
-            model = torch.jit.load(str(self.model_path), map_location=self.device)
+        # 读取模型元信息
+        if info_path is None:
+            info_path = str(Path(model_path).parent / "model_info.json")
+        if Path(info_path).exists():
+            with open(info_path) as f:
+                self.info = json.load(f)
         else:
-            raise ValueError(f"Unsupported model format: {suffix}")
-        model.eval()
-        return model.to(self.device)
+            self.info = {}
 
-    def _load_info(self) -> dict:
-        if self.info_path and self.info_path.exists():
-            with open(self.info_path, "r") as f:
-                return json.load(f)
-        return {}
+        self.expected_sampling_rate = self.info.get("sampling_rate", 100.0)
+        self.expected_length = self.info.get("input_shape", [1, 3, 3001])[-1]
+        self.expected_channels = self.info.get("input_channels", 3)
+        self.phase_labels = self.info.get("phase_labels", ["Noise", "P", "S"])
 
-    @property
-    def phase_labels(self) -> List[str]:
-        """模型输出的震相类型标签，如 ["P", "S"]。"""
-        return self.model_info.get("phase_labels", ["P", "S"])
+        # 尝试从模型中读取 labels 属性
+        if hasattr(self.model, "labels"):
+            self.phase_labels = list(self.model.labels)
 
-    @property
-    def expected_sampling_rate(self) -> float:
-        return self.model_info.get("sampling_rate", 100.0)
-
-    @property
-    def expected_length(self) -> int:
-        return self.model_info.get("input_length", 3000)
-
-    def predict(self, waveform: torch.Tensor) -> torch.Tensor:
-        """执行推理。
+    def predict(self, data: np.ndarray) -> np.ndarray:
+        """对输入波形进行推理。
 
         Parameters
         ----------
-        waveform : torch.Tensor
-            shape (batch, channels, samples)。
+        data : np.ndarray
+            波形数据，shape (n_channels, n_samples)，采样率需为 self.expected_sampling_rate。
 
         Returns
         -------
-        torch.Tensor
-            shape (batch, n_phases, samples) — 每个采样点的概率。
+        np.ndarray
+            各震相的概率序列，shape (n_classes, n_samples)。
         """
+        if data.ndim == 1:
+            data = data[np.newaxis, :]
+
+        # 裁剪/填充到期望长度
+        n_samples = data.shape[-1]
+        if n_samples > self.expected_length:
+            data = data[:, :self.expected_length]
+        elif n_samples < self.expected_length:
+            pad = self.expected_length - n_samples
+            data = np.pad(data, ((0, 0), (0, pad)), mode="constant")
+
+        tensor = torch.from_numpy(data.astype(np.float32)).unsqueeze(0)  # (1, C, N)
+        tensor = tensor.to(self.device)
+
         with torch.no_grad():
-            waveform = waveform.to(self.device)
-            output = self.model(waveform)
-        return output.cpu()
+            output = self.model(tensor)  # (1, classes, N)
+
+        return output.squeeze(0).cpu().numpy()  # (classes, N)
+
+    def predict_prob(self, data: np.ndarray) -> np.ndarray:
+        """返回 softmax 归一化后的概率（0~1）。"""
+        probs = self.predict(data)
+        exp = np.exp(probs - probs.max(axis=0, keepdims=True))
+        return exp / exp.sum(axis=0, keepdims=True)

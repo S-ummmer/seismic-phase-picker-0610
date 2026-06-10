@@ -1,9 +1,11 @@
 {
     "model_name": "PhaseNet",
     "version": "1.0",
-    "phase_labels": ["P", "S"],
+    "phase_labels": ["Noise", "P", "S"],
     "sampling_rate": 100.0,
-    "input_length": 3000,
+    "input_shape": [1, 3, 3001],
     "input_channels": 3,
-    "description": "PhaseNet earthquake phase picker (TorchScript)"
+    "component_order": "ENZ",
+    "output_classes": 3,
+    "description": "PhaseNet earthquake phase picker (SeisBench pretrained), TorchScript exported"
 }
