@@ -41,9 +41,17 @@ venv.bak/
 # ============================================
 # 数据文件（保留文件夹结构，忽略实际数据）
 # ============================================
-# 完全不上传原始波形和预处理缓存
-data/raw/
-data/processed/
+# 忽略 raw 目录下的所有内容，但保留目录本身
+data/raw/*
+!data/raw/
+!data/raw/.gitkeep
+!data/raw/README.md
+
+# 忽略 processed 目录下的所有内容，但保留目录本身
+data/processed/*
+!data/processed/
+!data/processed/.gitkeep
+!data/processed/README.md
 
 # 忽略 labels 目录下的所有文件，但保留目录和说明文件
 data/labels/*

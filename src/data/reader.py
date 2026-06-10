@@ -1,121 +1,137 @@
-# src/data/reader.py — Waveform 对象 + 时间映射
+# src/data/reader.py
 # D:\Github\Mk-project\seismic-phase-picker\src\data\reader.py
 
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Optional, Dict
+from obspy import read as obspy_read
+from obspy.core.stream import Stream
+from typing import Optional, Dict, List, Tuple
+from dataclasses import dataclass
 
 
 @dataclass
 class Waveform:
-    """地震波形数据结构。
-
-    封装原始波形数据及其元信息，统一不同数据源的接口。
+    """波形数据容器。
 
     Attributes
     ----------
     data : np.ndarray
-        波形数据，shape 为 (n_channels, n_samples)。
+        波形数组，shape (n_channels, n_samples)。
     sampling_rate : float
         采样率 (Hz)。
-    start_time : float
-        波形起始时间 (Unix timestamp)。
-    channel_names : tuple of str
-        通道名称，如 ("Z", "N", "E")。
-    station_id : Optional[str]
-        台站标识。
-    meta : Dict
-        附加元信息 (事件ID、震中距等)。
+    starttime : float
+        起始时间 (Unix timestamp)。
+    station : str
+        台站名。
+    channel : str
+        通道名。
     """
-    data: np.ndarray               # (n_channels, n_samples)
-    sampling_rate: float           # Hz
-    start_time: float              # Unix timestamp
-    channel_names: tuple = ("Z", "N", "E")
-    station_id: Optional[str] = None
-    meta: Dict = field(default_factory=dict)
+    data: np.ndarray
+    sampling_rate: float
+    starttime: float
+    station: str = ""
+    channel: str = ""
 
-    @property
-    def n_channels(self) -> int:
-        return self.data.shape[0]
+    def __repr__(self):
+        return (f"Waveform(station={self.station}, channel={self.channel}, "
+                f"shape={self.data.shape}, sr={self.sampling_rate} Hz, "
+                f"start={self.starttime})")
+
+    def time_at_index(self, idx: int) -> float:
+        """返回第 idx 个采样点的绝对时间 (秒)。"""
+        return self.starttime + idx / self.sampling_rate
 
     @property
     def n_samples(self) -> int:
-        return self.data.shape[1]
+        return self.data.shape[-1]
 
     @property
     def duration(self) -> float:
         return self.n_samples / self.sampling_rate
 
     @property
-    def end_time(self) -> float:
-        return self.start_time + self.duration
+    def n_channels(self) -> int:
+        return self.data.shape[0] if self.data.ndim > 1 else 1
 
-    def time_at_index(self, index: int) -> float:
-        """将采样索引映射到绝对时间 (Unix timestamp)。
+
+class WaveformReader:
+    """波形文件读取器 (支持 miniSEED / SAC / HDF5)。"""
+
+    def __init__(self, prefer_channels: Tuple[str, ...] = ("Z", "N", "E")):
+        """
+        Parameters
+        ----------
+        prefer_channels : tuple
+            优先保留的通道分量 (用于组合同一台站的三分量)。
+        """
+        self.prefer_channels = prefer_channels
+
+    def read(self, path: str, station: Optional[str] = None) -> List[Waveform]:
+        """读取波形文件，返回 Waveform 列表。
 
         Parameters
         ----------
-        index : int
-            采样点索引。
+        path : str
+            文件路径。
+        station : str, optional
+            指定台站名，只返回该台站的数据。
 
         Returns
         -------
-        float
-            该采样点对应的绝对时间。
+        List[Waveform]
         """
-        return self.start_time + index / self.sampling_rate
+        st = obspy_read(path)
+        return self._stream_to_waveforms(st, station=station)
 
-    def index_at_time(self, time: float) -> int:
-        """将绝对时间映射到最近的采样索引。
+    def read_multiple(self, paths: List[str]) -> List[Waveform]:
+        """读取多个文件并合并。"""
+        waveforms = []
+        for p in paths:
+            waveforms.extend(self.read(p))
+        return waveforms
 
-        Parameters
-        ----------
-        time : float
-            绝对时间 (Unix timestamp)。
+    def _stream_to_waveforms(self, st: Stream, station: Optional[str] = None) -> List[Waveform]:
+        import obspy
+        waveforms = []
+        for tr in st:
+            net = tr.stats.network or ""
+            sta = tr.stats.station or ""
+            loc = tr.stats.location or ""
+            cha = tr.stats.channel or ""
+
+            if station is not None and sta != station:
+                continue
+
+            starttime = float(tr.stats.starttime.timestamp)
+            sr = float(tr.stats.sampling_rate)
+            data = tr.data.astype(np.float32).copy()
+
+            # 确保是 2D: (n_channels, n_samples)
+            if data.ndim == 1:
+                data = data[np.newaxis, :]
+
+            wf = Waveform(
+                data=data,
+                sampling_rate=sr,
+                starttime=starttime,
+                station=sta,
+                channel=cha,
+            )
+            waveforms.append(wf)
+        return waveforms
+
+    def read_event(self, event_path: str) -> Dict[str, List[Waveform]]:
+        """读取单个事件文件，按台站分组。
 
         Returns
         -------
-        int
-            最近的采样点索引 (裁剪到 [0, n_samples-1])。
+        Dict[str, List[Waveform]]
+            {station_id: [Waveform, ...]}
         """
-        offset = (time - self.start_time) * self.sampling_rate
-        return int(np.clip(round(offset), 0, self.n_samples - 1))
-
-    def time_to_sample(self, relative_time: float) -> int:
-        """将相对时间 (秒, 以 start_time 为 0) 映射到采样索引。
-
-        Parameters
-        ----------
-        relative_time : float
-            相对于波形起始的时间偏移 (秒)。
-
-        Returns
-        -------
-        int
-            采样点索引。
-        """
-        offset = relative_time * self.sampling_rate
-        return int(np.clip(round(offset), 0, self.n_samples - 1))
-
-    def sample_to_time(self, index: int) -> float:
-        """将采样索引映射到相对时间 (秒)。
-
-        Parameters
-        ----------
-        index : int
-            采样点索引。
-
-        Returns
-        -------
-        float
-            相对于波形起始的时间偏移 (秒)。
-        """
-        return index / self.sampling_rate
-
-    def __repr__(self) -> str:
-        return (
-            f"Waveform(station={self.station_id}, "
-            f"shape={self.data.shape}, "
-            f"sr={self.sampling_rate} Hz, "
-            f"duration={self.duration:.1f}s)"
-        )
+        st = obspy_read(event_path)
+        result: Dict[str, List[Waveform]] = {}
+        for wf in self._stream_to_waveforms(st):
+            key = wf.station
+            if key not in result:
+                result[key] = []
+            result[key].append(wf)
+        return result

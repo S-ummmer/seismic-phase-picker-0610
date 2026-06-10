@@ -32,23 +32,24 @@ class Resampler:
         Returns
         -------
         Waveform
-            重采样后的波形 (新的 data array, 其余元信息保持不变)。
+            重采样后的波形。
         """
-        if waveform.sampling_rate == self.target_sr:
+        if abs(waveform.sampling_rate - self.target_sr) < 1e-6:
             return waveform
 
         ratio = self.target_sr / waveform.sampling_rate
         new_length = int(waveform.n_samples * ratio)
 
-        resampled_data = signal.resample(
-            waveform.data, new_length, axis=1
-        )
+        # signal.resample 沿 axis=-1 重采样
+        if waveform.data.ndim == 1:
+            resampled = signal.resample(waveform.data, new_length)
+        else:
+            resampled = signal.resample(waveform.data, new_length, axis=1)
 
         return Waveform(
-            data=resampled_data.astype(np.float32),
+            data=resampled.astype(np.float32),
             sampling_rate=self.target_sr,
-            start_time=waveform.start_time,
-            channel_names=waveform.channel_names,
-            station_id=waveform.station_id,
-            meta=waveform.meta,
+            starttime=waveform.starttime,
+            station=waveform.station,
+            channel=waveform.channel,
         )
