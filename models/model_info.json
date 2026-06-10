@@ -1,0 +1,9 @@
+{
+    "model_name": "PhaseNet",
+    "version": "1.0",
+    "phase_labels": ["P", "S"],
+    "sampling_rate": 100.0,
+    "input_length": 3000,
+    "input_channels": 3,
+    "description": "PhaseNet earthquake phase picker (TorchScript)"
+}

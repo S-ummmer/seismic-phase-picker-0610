@@ -1,0 +1,33 @@
+# Seismic Phase Picker Configuration
+
+data:
+  raw_path: "data/raw/"
+  labels_path: "data/labels/"
+  processed_path: "data/processed/"
+  format: "hdf5"        # hdf5 / mseed / sac
+  sampling_rate: 100     # Hz
+
+model:
+  type: "phasenet"       # phasenet / eqtransformer
+  jit_path: "models/phasenet.jit"
+  info_path: "models/model_info.json"
+  device: "cpu"          # cpu / cuda / mps
+
+inference:
+  window_length: 30.0    # seconds
+  step_size: 15.0        # seconds (50% overlap)
+  batch_size: 32
+  threshold: 0.5
+
+postprocess:
+  method: "peak_detection"
+  min_distance: 50       # samples
+  prominence: 0.3
+
+evaluation:
+  tolerance: 0.5         # seconds
+  phases: ["P", "S"]     # target phases
+
+logging:
+  level: "INFO"
+  output_dir: "outputs/logs/"

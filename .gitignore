@@ -1,0 +1,125 @@
+# ============================================
+# Python 通用
+# ============================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# 虚拟环境（所有类型）
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Conda 环境
+.envs/
+*.conda
+
+# ============================================
+# IDE 与编辑器
+# ============================================
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# VSCode
+.vscode/
+
+# Jupyter Notebook 检查点
+.ipynb_checkpoints/
+
+# ============================================
+# 数据文件（保留文件夹结构，忽略实际数据）
+# ============================================
+# 完全不上传原始波形和预处理缓存
+data/raw/
+data/processed/
+
+# 忽略 labels 目录下的所有文件，但保留目录和说明文件
+data/labels/*
+!data/labels/
+!data/labels/README.md
+!data/labels/.gitkeep
+
+# ============================================
+# 模型文件（保留目录和元信息，忽略权重文件）
+# ============================================
+models/*
+!models/
+!models/README.md
+!models/.gitkeep
+!models/model_info.json
+
+# ============================================
+# 输出与日志（保留文件夹结构）
+# ============================================
+outputs/*
+!outputs/
+!outputs/README.md
+!outputs/.gitkeep
+!outputs/predictions/
+!outputs/logs/
+
+outputs/predictions/*
+!outputs/predictions/
+!outputs/predictions/.gitkeep
+
+outputs/logs/*
+!outputs/logs/
+!outputs/logs/.gitkeep
+
+*.log
+logs/
+
+# ============================================
+# Jupyter Notebook 输出清理
+# ============================================
+*.ipynb
+# 如果想保留 notebook 但忽略其输出，建议使用 nbstripout 工具
+
+# ============================================
+# 系统文件
+# ============================================
+.DS_Store          # macOS
+Thumbs.db          # Windows
+desktop.ini        # Windows
+*.swp              # Vim
+*.swo              # Vim
+*~                 # 临时文件
+.Trash-*           # Linux
+
+# ============================================
+# 环境与配置（敏感信息）
+# ============================================
+.env
+.env.local
+.env.*.local
+*.secret
+config.local.yaml
+
+# ============================================
+# 测试与覆盖率
+# ============================================
+htmlcov/
+.coverage
+.coverage.*
+.tox/
+.pytest_cache/
+.mypy_cache/
+
+# ============================================
+# 其他
+# ============================================
+*.zip
+*.tar.gz
+*.rar
