@@ -34,7 +34,7 @@ seismic-phase-picker/
 | `labels/` | 真实震相答案 | CSV/PHASE 文件，包含文件名、震相类型（P/S）、到时时间 |
 | `processed/` | 预处理缓存（可选） | 预处理后的 .npy 或 .h5 中间文件，加速重复实验 |
 
-**数据流：** `raw/` → 经 `src/data/` 模块处理 → 模型输入；`labels/` → 经 `src/data/label_reader.py` 解析 → 评估模块
+**数据流：** `raw/` → 经 `src/io/` 模块读取 → `src/signal/` 处理 → 模型输入；`labels/` → 经 `src/io/label_reader.py` 解析 → 评估模块
 
 ---
 
@@ -59,24 +59,45 @@ seismic-phase-picker/
 
 ---
 
-### 3.2 `src/data/` — 数据加载与预处理模块
+### 3.2 `src/io/` — 格式相关 IO 层
 
-| 文件 | 职责 | 输入 | 输出 | 为什么独立 |
-|------|------|------|------|------------|
-| `reader.py` | 读取原始波形文件 | MSEED/HDF5/CSV 文件路径 | 波形对象（data, starttime, sampling_rate） | 隔离文件格式差异；提取头段时间用于绝对时间对齐 |
-| `resampler.py` | 重采样到目标频率 | 原始波形对象 | 100 Hz 重采样波形 | 独立可测；包含抗混叠滤波；适配不同台站原始采样率 |
-| `preprocessor.py` | 可选信号预处理 | 重采样后波形 | 去均值/滤波/归一化后波形 | 根据 `config.yaml` 和 `model_info.json` 决定是否执行；若模型内置则跳过 |
-| `label_reader.py` | 读取真实震相答案 | CSV/PHASE 文件 | 字典 `{filename: [(type, time_s), ...]}` | 答案格式多变，独立模块适配不同赛题；评估模块直接调用 |
+**职责：** 隔离文件格式差异，输出统一的 `Waveform` 对象。
 
-**典型调用链：**
-```
-reader.py → resampler.py → preprocessor.py → 模型输入
-label_reader.py → 评估模块
-```
+| 文件 | 职责 | 输入 | 输出 |
+|------|------|------|------|
+| `mseed_reader.py` | 读取 miniSEED 波形 + 三分量合并 | MSEED 文件路径 | `Waveform` 列表（单通道或 ENZ 三分量） |
+| `hdf5_reader.py` | 读取 HDF5+CSV 格式 (STEAD/谛听) | HDF5 文件 + CSV 元数据 | `Waveform` + `Hdf5TraceInfo` (含标签) |
+| `label_reader.py` | 读取震相标签（CSV/STEAD/谛听） | CSV/PHASE 文件 | `{trace_name: [PhaseLabel, ...]}` |
+
+**关键设计：** IO 层只负责"读到什么"，不做信号处理。不同格式的读取策略各不相同，但一旦输出 `Waveform`，后续所有代码完全通用。
+
+**Waveform 对象**（定义在 `src/io/__init__.py`）：
+- `data`: `(N_channels, N_samples)` ndarray
+- `sampling_rate`, `starttime`, `station`, `channel`
+- `time_at_index(idx)`: 采样点 → 绝对时间
 
 ---
 
-### 3.3 `src/models/` — 模型封装模块
+### 3.3 `src/signal/` — 格式无关信号处理层
+
+**职责：** 对 `Waveform` 做纯信号处理，不关心数据来源。
+
+| 文件 | 职责 | 详细说明 |
+|------|------|----------|
+| `resampler.py` | 重采样到目标频率 | 独立可测；含抗混叠滤波；适配不同台站原始采样率 |
+| `preprocessor.py` | 信号预处理流水线 | demean → detrend → taper → bandpass → normalize → trim；顺序固定，每步可独立开关 |
+| `event_detector.py` | STA/LTA 事件检测 | 从连续波形中检测地震事件窗口；仅路径 A 使用 |
+
+**处理链：**
+```
+Waveform → resampler.py → preprocessor.py → 模型输入
+```
+
+> **注意：** 对于预截取窗口（路径 B，如 STEAD），跳过 `event_detector.py`，直接 preprocess。
+
+---
+
+### 3.4 `src/models/` — 模型封装模块
 
 | 文件 | 职责 | 详细说明 |
 |------|------|----------|
@@ -89,7 +110,7 @@ label_reader.py → 评估模块
 
 ---
 
-### 3.4 `src/inference/` — 推理引擎模块
+### 3.5 `src/inference/` — 推理引擎模块
 
 | 文件 | 职责 | 详细说明 |
 |------|------|----------|
@@ -101,7 +122,7 @@ label_reader.py → 评估模块
 
 ---
 
-### 3.5 `src/postprocess/` — 后处理模块
+### 3.6 `src/postprocess/` — 后处理模块
 
 | 文件 | 职责 | 详细说明 |
 |------|------|----------|
@@ -136,22 +157,36 @@ grading.py（分级 IoU）
 
 ---
 
-### 3.7 `src/pipeline.py` — 主流程编排
+### 3.7 `src/pipeline.py` — 双路径主流程编排
 
-**职责：** 将上述所有模块串联为完整的端到端流程。
+**职责：** 将上述所有模块串联。自动识别数据格式分派到两条路径。
 
-**核心流程：**
+**路径 A（连续波形 — MSEED）：**
 ```
 MSEED 文件
-    → reader.read_mseed()
-    → resampler.resample()
-    → preprocessor.preprocess()
-    → wrapper.predict()
-    → sliding_window（如需）
-    → peak_detector.detect()
-    → matcher.match() + metrics.calculate() + grading.classify()
+    → MseedReader.read()
+    → MseedReader.group_station_3ch()
+    → EventDetector.detect()        ← STA/LTA 事件检测
+    → EventDetector.extract_window()
+    → Resampler.resample()
+    → Preprocessor.process()
+    → ModelWrapper.predict_prob()
+    → PeakDetector.detect()
+    → 输出震相列表
+```
+
+**路径 B（预截取窗口 — HDF5+CSV）：**
+```
+HDF5 + CSV
+    → Hdf5Reader.read()
+    → Resampler.resample()
+    → Preprocessor.process()
+    → ModelWrapper.predict_prob()
+    → PeakDetector.detect()
     → 输出震相列表 + 评估分数
 ```
+
+**核心原则：** 格式相关的放 `src/io/`，格式无关的放 `src/signal/`。
 
 ---
 
@@ -159,9 +194,13 @@ MSEED 文件
 
 | 文件 | 作用 | 详细说明 |
 |------|------|----------|
-| `run_pipeline.py` | 单文件/批量处理 | 对指定 MSEED 文件运行完整流程，输出预测震相和评估结果 |
+| `run_pipeline.py` | 批量推理 | 自动识别 MSEED/HDF5 格式，运行完整流程，输出 CSV 预测震相 |
 | `evaluate_folder.py` | 批量评估 | 对整个测试集运行，汇总所有文件的评估指标 |
-| `api_server.py` | API 服务 | 比赛要求的 HTTP API 接口：接收 MSEED 文件路径 → 返回 JSON 震相列表 |
+| `api_server.py` | API 服务 | 比赛要求的 HTTP API 接口：接收文件路径 → 返回 JSON 震相列表 |
+| `inspect_mseed.py` | 数据审视 | 查看 miniSEED 文件结构和头段信息 |
+| `inspect_stead.py` | 数据审视 | 查看 STEAD HDF5 波形和 CSV 标签详情 |
+| `test_read_data.py` | 单元测试 | 验证 MSEED 数据读取+预处理链路 |
+| `test_inference.py` | 单元测试 | 验证 MSEED 完整推理链路（读取→推理→拾取） |
 
 ---
 
@@ -180,9 +219,10 @@ MSEED 文件
 | 文件 | 测试对象 | 详细说明 |
 |------|----------|----------|
 | `fixtures/` | 测试数据 | 人工合成的小型波形数据和假答案，确保测试快速、独立、可复现 |
-| `test_reader.py` | `reader.py` | 测试 MSEED 读取、头段解析 |
+| `test_reader.py` | `mseed_reader.py` | 测试 MSEED 读取、头段解析、三分量合并 |
 | `test_resampler.py` | `resampler.py` | 测试重采样精度、抗混叠效果 |
-| `test_preprocessor.py` | `preprocessor.py` | 测试滤波、归一化选项组合 |
+| `test_preprocessor.py` | `preprocessor.py` | 测试 demean/detrend/taper/filter/normalize |
+| `test_event_detector.py` | `event_detector.py` | 测试 STA/LTA 事件检测正确性 |
 | `test_matcher.py` | `matcher.py` | 测试容忍窗口匹配正确性 |
 | `test_metrics.py` | `metrics.py` | 测试 Precision/Recall/F1 计算 |
 | `test_grading.py` | `grading.py` | 测试完好/破坏/毁坏分级逻辑 |
@@ -207,8 +247,22 @@ pip install -r requirements.txt
 # 运行测试（验证数据读取+预处理）
 python scripts/test_read_data.py
 
-# 完整流程（单文件）
-python scripts/run_pipeline.py --config config.yaml --input data/raw/2021/01/xxx
+# 数据结构预览
+# （HDF5+CSV）
+python scripts/inspect_stead.py --index 1234
+# MSEED
+python scripts/inspect_mseed.py --index 1
+
+# MSEED 路径（自动识别连续波形）
+python scripts/run_pipeline.py --data_dir data/raw/2021/
+
+# HDF5+CSV 路径（自动识别预截取窗口）
+python scripts/run_pipeline.py --data_dir data/raw/stead/
+
+# 限制数量 + 调阈值
+python scripts/run_pipeline.py --data_dir data/raw/stead/ --max_files 100 --threshold 0.3
+
+python scripts/evaluate_stead.py --split test --threshold 0.2 --prominence 0.1 --min-distance 25
 
 # 批量评估
 python scripts/evaluate_folder.py --config config.yaml --data_dir data/raw/2021/01/

@@ -18,7 +18,7 @@ class TestPreprocessor:
         self.wf = Waveform(
             data=np.random.randn(3, 1000).astype(np.float32) + 5.0,  # 含偏置
             sampling_rate=100.0,
-            start_time=0.0,
+            starttime=0.0,
         )
 
     def test_demean(self):

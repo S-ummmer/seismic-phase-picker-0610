@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest
 from src.evaluation.matcher import PhaseMatcher, MatchSummary, MatchResult
 from src.evaluation.metrics import MetricsCalculator
 from src.data.label_reader import PhaseLabel
@@ -69,4 +70,4 @@ class TestMetricsCalculator:
         metrics = calc.compute(summary)
 
         assert abs(metrics.mean_time_error - 0.1) < 1e-6
-        assert metrics.median_time_error == 0.1
+        assert abs(metrics.median_time_error - 0.1) < 1e-6

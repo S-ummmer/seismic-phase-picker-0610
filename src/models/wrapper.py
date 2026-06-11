@@ -79,8 +79,24 @@ class ModelWrapper:
 
         return output.squeeze(0).cpu().numpy()  # (classes, N)
 
+    def predict_batch(self, batch: np.ndarray) -> np.ndarray:
+        """批量推理 (B, C, N) → (B, classes, N)。
+
+        用于滑动窗口等需要一次处理多个窗口的场景。
+        """
+        tensor = torch.from_numpy(batch.astype(np.float32)).to(self.device)
+        with torch.no_grad():
+            output = self.model(tensor)  # (B, classes, N)
+        return output.cpu().numpy()
+
     def predict_prob(self, data: np.ndarray) -> np.ndarray:
-        """返回 softmax 归一化后的概率（0~1）。"""
+        """返回 softmax 归一化后的概率（0~1），单条 (C, N)。"""
         probs = self.predict(data)
         exp = np.exp(probs - probs.max(axis=0, keepdims=True))
         return exp / exp.sum(axis=0, keepdims=True)
+
+    def predict_prob_batch(self, batch: np.ndarray) -> np.ndarray:
+        """批量 softmax 概率 (B, C, N) → (B, classes, N)。"""
+        probs = self.predict_batch(batch)
+        exp = np.exp(probs - probs.max(axis=1, keepdims=True))
+        return exp / exp.sum(axis=1, keepdims=True)

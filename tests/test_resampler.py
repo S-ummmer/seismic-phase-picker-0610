@@ -18,7 +18,8 @@ class TestResampler:
         self.wf = Waveform(
             data=np.random.randn(3, 500).astype(np.float32),  # 5s @ 100Hz
             sampling_rate=100.0,
-            start_time=0.0,
+            starttime=0.0,
+            station="TEST",
         )
 
     def test_upsample(self):
@@ -41,5 +42,5 @@ class TestResampler:
     def test_metadata_preserved(self):
         resampler = Resampler(target_sr=200.0)
         result = resampler.resample(self.wf)
-        assert result.start_time == self.wf.start_time
-        assert result.station_id == self.wf.station_id
+        assert result.starttime == self.wf.starttime
+        assert result.station == self.wf.station
