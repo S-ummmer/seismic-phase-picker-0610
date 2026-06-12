@@ -4,7 +4,7 @@
 import numpy as np
 import torch
 from typing import List, Tuple
-from src.data.reader import Waveform
+from src.io import Waveform
 from src.models.wrapper import ModelWrapper
 
 

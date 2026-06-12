@@ -18,6 +18,7 @@ from .io.label_reader import LabelReader, EventLabels, PhaseLabel
 from .signal.preprocessor import Preprocessor
 from .signal.resampler import Resampler
 from .signal.event_detector import EventDetector, EventWindow
+from .signal.denoiser import DeepDenoiser, create_denoiser
 from .models.wrapper import ModelWrapper
 from .inference.sliding_window import SlidingWindowInference
 from .postprocess.peak_detector import PeakDetector, PickedPhase
@@ -52,6 +53,14 @@ class SeismicPipeline:
             model_path=model_cfg["jit_path"],
             device=model_cfg.get("device", "cpu"),
             info_path=model_cfg.get("info_path"),
+        )
+
+        # DeepDenoiser 去噪（可选，在预处理前）
+        dn_cfg = cfg.get("denoiser", {})
+        self.denoiser = create_denoiser(
+            enabled=dn_cfg.get("enabled", False),
+            pretrained=dn_cfg.get("pretrained", "original"),
+            device=dn_cfg.get("device", "cpu"),
         )
 
         # 推理
@@ -173,8 +182,13 @@ class SeismicPipeline:
     # ── 公用推理 ───────────────────────────────────────
 
     def _run_inference(self, waveform: Waveform) -> List[PickedPhase]:
-        """完整推理链: 重采样 → 预处理 → 模型 → 峰值拾取。"""
+        """完整推理链: 重采样 → [去噪] → 预处理 → 模型 → 峰值拾取。"""
         wf = self.resampler.resample(waveform)
+
+        # DeepDenoiser（可选，在预处理前）
+        if self.denoiser is not None:
+            wf.data = self.denoiser.denoise(wf.data)
+
         wf = self.preprocessor.process(wf)
         probs = self.model.predict_prob(wf.data)
         picks = self.peak_detector.detect(
@@ -183,6 +197,44 @@ class SeismicPipeline:
             time_fn=wf.time_at_index,
         )
         return picks
+
+    def _run_inference_dual(
+        self, waveform: Waveform
+    ) -> Tuple[List[PickedPhase], List[PickedPhase]]:
+        """双路径推理，返回 (raw_picks, denoised_picks)。
+
+        用于 A/B 对比：一次推理同时产出去噪前后的结果。
+        """
+        wf = self.resampler.resample(waveform)
+        wf_raw = Waveform(
+            station=wf.station,
+            data=wf.data.copy(),
+            start_time=wf.start_time,
+            sampling_rate=wf.sampling_rate,
+            channel_names=wf.channel_names,
+        )
+
+        # 路径 1：无去噪
+        raw_wf = self.preprocessor.process(wf_raw)
+        raw_probs = self.model.predict_prob(raw_wf.data)
+        raw_picks = self.peak_detector.detect(
+            probabilities=raw_probs[1:],
+            phase_labels=["P", "S"],
+            time_fn=raw_wf.time_at_index,
+        )
+
+        # 路径 2：有去噪
+        if self.denoiser is not None:
+            wf.data = self.denoiser.denoise(wf.data)
+        dn_wf = self.preprocessor.process(wf)
+        dn_probs = self.model.predict_prob(dn_wf.data)
+        dn_picks = self.peak_detector.detect(
+            probabilities=dn_probs[1:],
+            phase_labels=["P", "S"],
+            time_fn=dn_wf.time_at_index,
+        )
+
+        return raw_picks, dn_picks
 
     def _build_labels(self, info: Hdf5TraceInfo) -> List[PhaseLabel]:
         labels = []

@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.evaluation.matcher import PhaseMatcher
-from src.data.label_reader import PhaseLabel
+from src.io.label_reader import PhaseLabel
 
 
 class TestPhaseMatcher:

@@ -15,6 +15,14 @@ preprocessing:
   normalize: true         # Z-score per-channel
   sampling_rate: 100      # Hz
 
+# DeepDenoiser 深度学习去噪（在预处理前执行）
+# 启用后生成 denoised/raw 双路径对比结果
+denoiser:
+  enabled: false          # true = 启用去噪
+  pretrained: "original"  # seisbench 预训练版本: "original" | "urban"
+  device: "cpu"           # cpu / cuda
+  overlap: 0.5            # 滑动窗口重叠比例
+
 model:
   type: "phasenet"        # phasenet / eqtransformer
   jit_path: "models/phasenet.jit"
@@ -42,6 +50,19 @@ postprocess:
 evaluation:
   tolerance: 0.5          # seconds
   phases: ["P", "S"]
+
+training:
+  epochs: 50
+  batch_size: 32
+  lr: 1e-3
+  weight_decay: 1e-5
+  p_buffer: 20            # P 标记半窗口 (samples)
+  s_buffer: 20            # S 标记半窗口 (samples)
+  window_size: 6001       # PhaseNet 输入长度 @100Hz (60s, 震前10s+震后50s)
+  require_both_ps: false
+  num_workers: 0
+  save_dir: "outputs/checkpoints"
+  patience: 10             # EarlyStopping 耐心值，0=禁用
 
 logging:
   level: "INFO"

@@ -16,8 +16,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.pipeline import SeismicPipeline
-from src.data.reader import Waveform
-from src.data.label_reader import LabelReader
+from src.io import Waveform
+from src.io.label_reader import LabelReader
 from src.evaluation.matcher import PhaseMatcher
 from src.evaluation.metrics import MetricsCalculator
 from src.evaluation.grading import EventGrader

@@ -29,7 +29,7 @@ import h5py
 import numpy as np
 
 from src.pipeline import SeismicPipeline
-from src.data.reader import Waveform
+from src.io import Waveform
 
 
 # --- 全局变量 ---

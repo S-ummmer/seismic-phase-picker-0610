@@ -5,5 +5,6 @@
 from .preprocessor import Preprocessor
 from .resampler import Resampler
 from .event_detector import EventDetector
+from .denoiser import DeepDenoiser, create_denoiser
 
-__all__ = ["Preprocessor", "Resampler", "EventDetector"]
+__all__ = ["Preprocessor", "Resampler", "EventDetector", "DeepDenoiser", "create_denoiser"]

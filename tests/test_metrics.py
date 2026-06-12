@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 from src.evaluation.matcher import PhaseMatcher, MatchSummary, MatchResult
 from src.evaluation.metrics import MetricsCalculator
-from src.data.label_reader import PhaseLabel
+from src.io.label_reader import PhaseLabel
 
 
 class TestMetricsCalculator:

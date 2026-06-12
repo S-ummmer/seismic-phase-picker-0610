@@ -17,6 +17,7 @@ import csv
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+from typing import Optional
 
 import numpy as np
 
@@ -26,6 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.io.hdf5_reader import Hdf5Reader
 from src.signal.resampler import Resampler
 from src.signal.preprocessor import Preprocessor
+from src.signal.denoiser import DeepDenoiser, create_denoiser
 from src.models.wrapper import ModelWrapper
 from src.postprocess.peak_detector import PeakDetector
 from src.evaluation.matcher import PhaseMatcher, MatchSummary
@@ -89,9 +91,10 @@ def evaluate_once(
     resampler: Resampler, preprocessor: Preprocessor,
     matcher: PhaseMatcher, calculator: MetricsCalculator, grader: EventGrader,
     scorer: PhaseScorer,
+    denoiser: Optional[DeepDenoiser] = None,
     split: str = "test", max_traces: int = 0,
 ) -> dict:
-    """主评估流程。"""
+    """主评估流程。如果提供 denoiser，同时产出去噪前后的对比结果。"""
 
     # ── 推理 ──────────────────────────────────────
     print(f"Loading {split} split from STEAD ...")
@@ -106,6 +109,8 @@ def evaluate_once(
         traces = reader.read_split(split, max_traces)
         n_total = len(traces)
         print(f"  Total traces: {n_total}")
+        if denoiser is not None:
+            print(f"  DeepDenoiser: ENABLED (pretrained={denoiser.pretrained})")
         print(f"  Running inference ...")
 
         t0 = datetime.now()
@@ -122,8 +127,13 @@ def evaluate_once(
             else:
                 n_no_label += 1
 
-            # 推理链（滑动窗口覆盖完整 trace）
             wf = resampler.resample(wf)
+
+            # ── 去噪（可选） ──────────────────────────
+            if denoiser is not None:
+                wf.data = denoiser.denoise(wf.data)
+
+            # 推理链（滑动窗口覆盖完整 trace）
             wf = preprocessor.process(wf)
             probs = _sliding_window_inference(
                 model, wf.data,
@@ -184,7 +194,7 @@ def evaluate_once(
     per_trace_metrics = []
 
     # 需要用 PhaseLabel for matching
-    from src.data.label_reader import PhaseLabel
+    from src.io.label_reader import PhaseLabel
 
     for row in all_rows:
         gt_phases = [PhaseLabel(time=t, phase=ph) for t, ph in row["gt_tuples"]]
@@ -355,6 +365,7 @@ def evaluate_once(
         "metrics": global_metrics,
         "grade": global_grade,
         "per_phase": global_metrics.per_phase,
+        "score": score_result,
     }
 
 
@@ -388,6 +399,108 @@ def _per_phase_stats(summary: MatchSummary) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# A/B Comparison Mode
+# ---------------------------------------------------------------------------
+
+def _run_comparison(
+    hdf5_path: str, csv_path: str,
+    model: ModelWrapper, detector: PeakDetector,
+    resampler: Resampler, preprocessor: Preprocessor,
+    matcher: PhaseMatcher, calculator: MetricsCalculator, grader: EventGrader,
+    scorer: PhaseScorer, denoiser: DeepDenoiser,
+    split: str = "test", max_traces: int = 0,
+):
+    """A/B 对比：with vs without DeepDenoiser。"""
+    print("=" * 60)
+    print("  A/B COMPARISON: DeepDenoiser ON vs OFF")
+    print("=" * 60)
+    print()
+
+    # ── Path A: Without Denoiser ──────────────────
+    print("[A] Evaluating WITHOUT DeepDenoiser ...")
+    result_raw = evaluate_once(
+        hdf5_path=hdf5_path, csv_path=csv_path,
+        model=model, detector=detector,
+        resampler=resampler, preprocessor=preprocessor,
+        matcher=matcher, calculator=calculator, grader=grader,
+        scorer=scorer,
+        denoiser=None,          # 不去噪
+        split=split, max_traces=max_traces,
+    )
+
+    # ── Path B: With Denoiser ─────────────────────
+    print("\n[B] Evaluating WITH DeepDenoiser ...")
+    result_dn = evaluate_once(
+        hdf5_path=hdf5_path, csv_path=csv_path,
+        model=model, detector=detector,
+        resampler=resampler, preprocessor=preprocessor,
+        matcher=matcher, calculator=calculator, grader=grader,
+        scorer=scorer,
+        denoiser=denoiser,      # 去噪
+        split=split, max_traces=max_traces,
+    )
+
+    # ── Comparison Report ─────────────────────────
+    _print_comparison(result_raw["metrics"], result_dn["metrics"], 
+                      result_raw.get("score"), result_dn.get("score"))
+
+
+def _print_comparison(raw_metrics, dn_metrics, raw_score=None, dn_score=None):
+    """打印 A/B 对比报告。"""
+    print("\n" + "=" * 70)
+    print("  COMPARISON SUMMARY")
+    print("=" * 70)
+    print(f"  {'Metric':<25} {'Raw':>10} {'Denoised':>10} {'Delta':>10}")
+    print(f"  {'-'*55}")
+
+    def _delta(a, b, pct=False):
+        d = b - a
+        if pct:
+            return f"{d:+.1f}pp"
+        return f"{d:+.4f}"
+
+    # 整体指标
+    for name, key in [
+        ("Precision", "precision"),
+        ("Recall", "recall"),
+        ("F1 Score", "f1"),
+        ("Mean Time Error (s)", "mean_time_error"),
+        ("Median Time Error (s)", "median_time_error"),
+    ]:
+        a = getattr(raw_metrics, key, 0)
+        b = getattr(dn_metrics, key, 0)
+        print(f"  {name:<25} {a:>10.4f} {b:>10.4f} {_delta(a, b):>10}")
+
+    print(f"  {'-'*55}")
+
+    # 按震相
+    for ph in ["P", "S"]:
+        rp = raw_metrics.per_phase.get(ph, {})
+        dp = dn_metrics.per_phase.get(ph, {})
+        for mname, key in [("Precision", "precision"), ("Recall", "recall"), ("F1", "f1")]:
+            a = rp.get(key, 0)
+            b = dp.get(key, 0)
+            label = f"  {ph}-wave {mname}"
+            print(f"  {label:<25} {a:>10.4f} {b:>10.4f} {_delta(a, b):>10}")
+
+    # 比赛评分
+    if raw_score is not None and dn_score is not None:
+        print(f"  {'─'*55}")
+        print(f"  {'Competition Score':<25} {raw_score.total_score:>10.2f} {dn_score.total_score:>10.2f} {_delta(raw_score.total_score, dn_score.total_score):>10}")
+
+    # 胜负判断
+    print(f"\n  {'='*55}")
+    f1_delta = dn_metrics.f1 - raw_metrics.f1
+    if f1_delta > 0.001:
+        print(f"  DeepDenoiser IMPROVES F1 by {f1_delta:+.4f}")
+    elif f1_delta < -0.001:
+        print(f"  DeepDenoiser DEGRADES F1 by {f1_delta:+.4f}")
+    else:
+        print(f"  DeepDenoiser: no significant change (|ΔF1| < 0.001)")
+    print(f"  {'='*55}\n")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -409,6 +522,12 @@ def main():
                         help="Peak detection min distance (samples)")
     parser.add_argument("--tolerance", type=float, default=0.5,
                         help="Matching tolerance (seconds)")
+    parser.add_argument("--denoise", action="store_true",
+                        help="Enable DeepDenoiser (Zhang et al. 2019)")
+    parser.add_argument("--denoiser-model", default="original",
+                        help="DeepDenoiser pretrained: original | urban")
+    parser.add_argument("--compare", action="store_true",
+                        help="Run A/B comparison: with vs without denoising")
     args = parser.parse_args()
 
     hdf5_path = PROJECT_ROOT / args.hdf5
@@ -426,6 +545,8 @@ def main():
     print(f"Split: {args.split}")
     print(f"Threshold: {args.threshold}  Prominence: {args.prominence}  MinDist: {args.min_distance}")
     print(f"Tolerance: {args.tolerance}s")
+    if args.denoise or args.compare:
+        print(f"DeepDenoiser: {args.denoiser_model}")
     print()
 
     # 初始化组件
@@ -438,16 +559,36 @@ def main():
     grader = EventGrader()
     scorer = PhaseScorer()
 
-    result = evaluate_once(
-        hdf5_path=str(hdf5_path),
-        csv_path=str(csv_path),
-        model=model, detector=detector,
-        resampler=resampler, preprocessor=preprocessor,
-        matcher=matcher, calculator=calculator, grader=grader,
-        scorer=scorer,
-        split=args.split,
-        max_traces=args.max,
-    )
+    # DeepDenoiser
+    denoiser = None
+    if args.denoise or args.compare:
+        denoiser = create_denoiser(
+            enabled=True,
+            pretrained=args.denoiser_model,
+        )
+
+    if args.compare:
+        # ── A/B 对比模式 ──────────────────────────
+        _run_comparison(
+            hdf5_path=str(hdf5_path),
+            csv_path=str(csv_path),
+            model=model, detector=detector,
+            resampler=resampler, preprocessor=preprocessor,
+            matcher=matcher, calculator=calculator, grader=grader,
+            scorer=scorer, denoiser=denoiser,
+            split=args.split, max_traces=args.max,
+        )
+    else:
+        result = evaluate_once(
+            hdf5_path=str(hdf5_path),
+            csv_path=str(csv_path),
+            model=model, detector=detector,
+            resampler=resampler, preprocessor=preprocessor,
+            matcher=matcher, calculator=calculator, grader=grader,
+            scorer=scorer, denoiser=denoiser,
+            split=args.split,
+            max_traces=args.max,
+        )
 
 
 if __name__ == "__main__":

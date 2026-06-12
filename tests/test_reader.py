@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
-from src.data.reader import Waveform
+from src.io import Waveform
 
 
 class TestWaveform:
